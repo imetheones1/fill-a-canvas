@@ -28,6 +28,10 @@ typedef struct AppState {
     uint64_t* color_timestamps;
     uint32_t* color_pixels;
     SDL_Texture* color_texture;
+
+    bool mouse_down;
+    float last_mouse_x;
+    float last_mouse_y;
 } AppState;
 
 void initialize_canvas(AppState* state){
@@ -107,8 +111,27 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 }
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
-    if (event->type == SDL_EVENT_QUIT) {
-        return SDL_APP_SUCCESS;
+    AppState *state = (AppState *)appstate;
+    switch (event->type) {
+        case SDL_EVENT_QUIT: {
+            return SDL_APP_SUCCESS;
+            break;
+        }
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+            state->mouse_down = true;
+            state->last_mouse_x = event->button.x;
+            state->last_mouse_y = event->button.y;
+            break;
+        }
+        case SDL_EVENT_MOUSE_BUTTON_UP: {
+            state->mouse_down = false;
+            break;
+        }
+        case SDL_EVENT_MOUSE_MOTION: {
+            if (!state->mouse_down) break;
+
+            break;
+        }
     }
     return SDL_APP_CONTINUE;
 }
