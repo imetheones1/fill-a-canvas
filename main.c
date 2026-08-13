@@ -13,13 +13,42 @@ typedef struct AppState {
     SDL_Window *window;
     SDL_Renderer *renderer;
 
+    int window_width;
+    int window_height;
+
     WindowState window_state;
 
     TTF_TextEngine* text_engine;
     TTF_Font* font;
 
     TTF_Text* intro_text;
+
+    size_t canvas_width;
+    size_t canvas_height;
+    uint64_t* color_timestamps;
+    uint32_t* color_pixels;
+    SDL_Texture* color_texture;
 } AppState;
+
+void initialize_canvas(AppState* state){
+    SDL_free(state->color_timestamps);
+    state->color_timestamps = NULL;
+    SDL_free(state->color_pixels);
+    state->color_pixels = NULL;
+    SDL_DestroyTexture(state->color_texture);
+    state->color_texture = NULL;
+
+    state->color_timestamps = SDL_calloc(state->canvas_width*state->canvas_height, sizeof(uint64_t));
+    state->color_pixels = SDL_malloc(state->canvas_width*state->canvas_height * sizeof(uint64_t));
+    SDL_memset4(state->color_pixels,0xFFFFFFFF,state->canvas_width*state->canvas_height);
+    state->color_texture = SDL_CreateTexture(
+        state->renderer, 
+        SDL_PIXELFORMAT_RGBA8888, 
+        SDL_TEXTUREACCESS_STREAMING, 
+        state->canvas_width, 
+        state->canvas_height
+    );
+}
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -38,7 +67,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     }
     *appstate = state;
 
-    if (!SDL_CreateWindowAndRenderer("fill a canvas with a 1px brush", 400, 300, SDL_WINDOW_RESIZABLE, &state->window, &state->renderer)) {
+    state->window_width = 400;
+    state->window_height = 300;
+
+    if (!SDL_CreateWindowAndRenderer("fill a canvas with a 1px brush", state->window_width, state->window_height, SDL_WINDOW_RESIZABLE, &state->window, &state->renderer)) {
         SDL_Log("Failed to create window and renderer: %s",SDL_GetError());
         return SDL_APP_FAILURE;
     }
@@ -59,11 +91,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
-    state->intro_text = TTF_CreateText(state->text_engine, state->font, "Hello World", 0);
+    TTF_SetFontWrapAlignment(state->font, TTF_HORIZONTAL_ALIGN_CENTER);
+
+    state->intro_text = TTF_CreateText(state->text_engine, state->font, "are you ready to fill in \na canvas using a 1px brush", 0);
     if (!state->intro_text) {
         SDL_Log("Failed to create text object: %s",SDL_GetError());
         return SDL_APP_FAILURE;
     }
+
+    state->canvas_width  = 100;
+    state->canvas_height = 100;
+    initialize_canvas(state);
 
     return SDL_APP_CONTINUE;
 }
@@ -78,15 +116,22 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 SDL_AppResult SDL_AppIterate(void *appstate) {
     AppState *state = (AppState *)appstate;
 
-    int screen_width, screen_height;
-    SDL_GetWindowSize(state->window, &screen_width, &screen_height);
+    SDL_GetWindowSize(state->window, &state->window_width, &state->window_height);
 
     SDL_SetRenderDrawColor(state->renderer, 0, 0, 0, 255);
     SDL_RenderClear(state->renderer);
 
+    SDL_UpdateTexture(state->color_texture,NULL,state->color_pixels,state->canvas_width * sizeof(uint32_t));
+
+    SDL_FRect canvas_rect = {.w = state->canvas_width, .h = state->canvas_height, .x = state->window_width/2 - state->canvas_width/2, .y = state->window_height/2 - state->canvas_height/2};
+    SDL_RenderTexture(state->renderer, state->color_texture, NULL, &canvas_rect);
+
     SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
     
-    TTF_DrawRendererText(state->intro_text,screen_width/2,screen_height/2);
+    int intro_text_width = 0;
+    int intro_text_height = 0;
+    TTF_GetTextSize(state->intro_text,&intro_text_width,&intro_text_height);
+    TTF_DrawRendererText(state->intro_text,state->window_width/2 - intro_text_width/2,state->window_height/2 - intro_text_height/2);
 
     SDL_RenderPresent(state->renderer);
 
