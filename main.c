@@ -28,6 +28,7 @@ typedef struct AppState {
     uint64_t* color_timestamps;
     uint32_t* color_pixels;
     SDL_Texture* color_texture;
+    uint64_t canvas_starttime;
 
     double canvas_zoom;
     double canvas_x, canvas_y;
@@ -56,6 +57,8 @@ void initialize_canvas(AppState* state){
         state->canvas_width, 
         state->canvas_height
     );
+
+    state->canvas_starttime = SDL_GetTicksNS();
 }
 
 void screen_to_canvas(AppState *state ,double screen_x, double screen_y, double* out_canvas_x, double* out_canvas_y) {
@@ -158,15 +161,44 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         case SDL_EVENT_MOUSE_MOTION: {
             if (!state->mouse_down) break;
             double mx = 0, my = 0;
-            screen_to_canvas(state, event->button.x,event->button.y, &mx, &my);
+            screen_to_canvas(state, event->motion.x,event->motion.y, &mx, &my);
             // if (!is_inside_rect(mx,my,0,0,state->canvas_width,state->canvas_height)) break;
 
-            const int x0 = mx;
-            const int y0 = my;
-            const int x1 = state->last_mouse_x;
-            const int x2 = state->last_mouse_y;
+            int x0 = mx;
+            int y0 = my;
+            int x1 = state->last_mouse_x;
+            int y1 = state->last_mouse_y;
 
-            // todo draw line
+            int dx = SDL_abs(x1 - x0);
+            int dy = -SDL_abs(y1 - y0);
+            
+            int sx = (x0 < x1) ? 1 : -1;
+            int sy = (y0 < y1) ? 1 : -1;
+            
+            int err = dx + dy; 
+            int e2;
+
+            while (1) {
+                if (is_inside_rect(x0,y0,0,0,state->canvas_width,state->canvas_height)) {
+                    size_t index = y0 * state->canvas_width + x0;
+                    if (state->color_timestamps && state->color_timestamps[index] == 0) state->color_timestamps[index] = event->motion.timestamp-state->canvas_starttime;
+                    if (state->color_pixels) state->color_pixels[index] = 0xFF000000;
+                }
+                
+                if (x0 == x1 && y0 == y1) break;
+                
+                e2 = 2 * err;
+                
+                if (e2 >= dy) { 
+                    err += dy; 
+                    x0 += sx; 
+                }
+                
+                if (e2 <= dx) { 
+                    err += dx; 
+                    y0 += sy; 
+                }
+            }
 
             state->last_mouse_x = mx;
             state->last_mouse_y = my;
