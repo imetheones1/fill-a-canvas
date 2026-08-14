@@ -37,6 +37,9 @@ typedef struct AppState {
     bool mouse_down;
     double last_mouse_x;
     double last_mouse_y;
+
+    TTF_Text* ready_button_text;
+    SDL_FRect ready_button_rect;
 } AppState;
 
 void initialize_canvas(AppState* state){
@@ -135,6 +138,19 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
+    state->ready_button_text = TTF_CreateText(state->text_engine,state->font, "yeah i'm ready",0);
+    if (!state->intro_text) {
+        SDL_Log("Failed to create text object: %s",SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+    int rbrw, rbrh;
+    if (!TTF_GetTextSize(state->ready_button_text,&rbrw,&rbrh)) {
+        SDL_Log("Failed to measure text: %s",SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+    state->ready_button_rect.w = rbrw+20;
+    state->ready_button_rect.h = rbrh+10;
+
     state->canvas_width  = 100;
     state->canvas_height = 100;
     initialize_canvas(state);
@@ -150,8 +166,20 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-            state->mouse_down = true;
-            screen_to_canvas(state, event->button.x,event->button.y, &state->last_mouse_x, &state->last_mouse_y);
+            switch (state->window_state){
+                case SELECTING: {
+                    if (is_inside_rect(event->button.x,event->button.y,state->ready_button_rect.x,state->ready_button_rect.y,state->ready_button_rect.w,state->ready_button_rect.h)) {
+                        state->window_state = MAIN;
+                        initialize_canvas(state);
+                    }
+                    break;
+                }
+                case MAIN: {
+                    state->mouse_down = true;
+                    screen_to_canvas(state, event->button.x,event->button.y, &state->last_mouse_x, &state->last_mouse_y);
+                    break;
+                }
+            }
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
@@ -162,7 +190,6 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             if (!state->mouse_down) break;
             double mx = 0, my = 0;
             screen_to_canvas(state, event->motion.x,event->motion.y, &mx, &my);
-            // if (!is_inside_rect(mx,my,0,0,state->canvas_width,state->canvas_height)) break;
 
             int x0 = mx;
             int y0 = my;
@@ -216,25 +243,40 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     SDL_SetRenderDrawColor(state->renderer, 0, 0, 0, 255);
     SDL_RenderClear(state->renderer);
 
-    SDL_UpdateTexture(state->color_texture,NULL,state->color_pixels,state->canvas_width * sizeof(uint32_t));
-
-    double zoom_factor = SDL_pow(2, state->canvas_zoom);
-
-    SDL_FRect canvas_rect = {
-        .w = state->canvas_width  * zoom_factor, 
-        .h = state->canvas_height * zoom_factor, 
-    };
-    canvas_rect.x = state->canvas_x + state->window_width/2  - canvas_rect.w/2;
-    canvas_rect.y = state->canvas_y + state->window_height/2 - canvas_rect.h/2;
-
-    SDL_RenderTextureRotated(state->renderer, state->color_texture, NULL, &canvas_rect, state->canvas_rotation,NULL,SDL_FLIP_NONE);
-
-    SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
+    switch (state->window_state) {
+        case SELECTING: {
+            SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
     
-    int intro_text_width = 0;
-    int intro_text_height = 0;
-    TTF_GetTextSize(state->intro_text,&intro_text_width,&intro_text_height);
-    TTF_DrawRendererText(state->intro_text,state->window_width/2 - intro_text_width/2,state->window_height/2 - intro_text_height/2);
+            int intro_text_width = 0;
+            int intro_text_height = 0;
+            TTF_GetTextSize(state->intro_text,&intro_text_width,&intro_text_height);
+            TTF_DrawRendererText(state->intro_text,state->window_width/2 - intro_text_width/2,state->window_height/2 - intro_text_height/2);
+
+            state->ready_button_rect.x = state->window_width/2 - state->ready_button_rect.w/2;
+            state->ready_button_rect.y = state->window_height/2 - state->ready_button_rect.h/2 + 50;
+
+            SDL_RenderRect(state->renderer, &state->ready_button_rect);
+
+            TTF_DrawRendererText(state->ready_button_text,state->window_width/2 - (state->ready_button_rect.w-20)/2,state->window_height/2 - (state->ready_button_rect.h-10)/2 + 50);
+
+            break;
+        }
+        case MAIN: {
+            SDL_UpdateTexture(state->color_texture,NULL,state->color_pixels,state->canvas_width * sizeof(uint32_t));
+
+            double zoom_factor = SDL_pow(2, state->canvas_zoom);
+
+            SDL_FRect canvas_rect = {
+                .w = state->canvas_width  * zoom_factor, 
+                .h = state->canvas_height * zoom_factor, 
+            };
+            canvas_rect.x = state->canvas_x + state->window_width/2  - canvas_rect.w/2;
+            canvas_rect.y = state->canvas_y + state->window_height/2 - canvas_rect.h/2;
+
+            SDL_RenderTextureRotated(state->renderer, state->color_texture, NULL, &canvas_rect, state->canvas_rotation,NULL,SDL_FLIP_NONE);
+            break;
+        }
+    }
 
     SDL_RenderPresent(state->renderer);
 
