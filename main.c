@@ -29,9 +29,13 @@ typedef struct AppState {
     uint32_t* color_pixels;
     SDL_Texture* color_texture;
 
+    double canvas_zoom;
+    double canvas_x, canvas_y;
+    double canvas_rotation;
+
     bool mouse_down;
-    float last_mouse_x;
-    float last_mouse_y;
+    double last_mouse_x;
+    double last_mouse_y;
 } AppState;
 
 void initialize_canvas(AppState* state){
@@ -53,6 +57,31 @@ void initialize_canvas(AppState* state){
         state->canvas_height
     );
 }
+
+void screen_to_canvas(AppState *state ,double screen_x, double screen_y, double* out_canvas_x, double* out_canvas_y) {
+    double center_x = (state->window_width / 2.0) + state->canvas_x;
+    double center_y = (state->window_height / 2.0) + state->canvas_y;
+
+    double dx = screen_x - center_x;
+    double dy = screen_y - center_y;
+
+    double rad = state->canvas_rotation * (SDL_PI_F / 180.0);
+    double cos_theta = SDL_cos(rad);
+    double sin_theta = SDL_sin(rad);
+
+    double rx = (dx * cos_theta) + (dy * sin_theta);
+    double ry = (-dx * sin_theta) + (dy * cos_theta);
+
+    double scale = SDL_pow(2, state->canvas_zoom);
+    double sx = rx / scale;
+    double sy = ry / scale;
+
+    *out_canvas_x = sx + (state->canvas_width / 2.0);
+    *out_canvas_y = sy + (state->canvas_height / 2.0);
+}
+
+#define is_inside_rect(x,y,rx,ry,rw,rh) (x>=rx&&x<rx+rw&&y>=ry&&y<ry+rh)
+
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -119,8 +148,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
             state->mouse_down = true;
-            state->last_mouse_x = event->button.x;
-            state->last_mouse_y = event->button.y;
+            screen_to_canvas(state, event->button.x,event->button.y, &state->last_mouse_x, &state->last_mouse_y);
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
@@ -129,7 +157,19 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         }
         case SDL_EVENT_MOUSE_MOTION: {
             if (!state->mouse_down) break;
+            double mx = 0, my = 0;
+            screen_to_canvas(state, event->button.x,event->button.y, &mx, &my);
+            // if (!is_inside_rect(mx,my,0,0,state->canvas_width,state->canvas_height)) break;
 
+            const int x0 = mx;
+            const int y0 = my;
+            const int x1 = state->last_mouse_x;
+            const int x2 = state->last_mouse_y;
+
+            // todo draw line
+
+            state->last_mouse_x = mx;
+            state->last_mouse_y = my;
             break;
         }
     }
@@ -146,8 +186,16 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     SDL_UpdateTexture(state->color_texture,NULL,state->color_pixels,state->canvas_width * sizeof(uint32_t));
 
-    SDL_FRect canvas_rect = {.w = state->canvas_width, .h = state->canvas_height, .x = state->window_width/2 - state->canvas_width/2, .y = state->window_height/2 - state->canvas_height/2};
-    SDL_RenderTexture(state->renderer, state->color_texture, NULL, &canvas_rect);
+    double zoom_factor = SDL_pow(2, state->canvas_zoom);
+
+    SDL_FRect canvas_rect = {
+        .w = state->canvas_width  * zoom_factor, 
+        .h = state->canvas_height * zoom_factor, 
+    };
+    canvas_rect.x = state->canvas_x + state->window_width/2  - canvas_rect.w/2;
+    canvas_rect.y = state->canvas_y + state->window_height/2 - canvas_rect.h/2;
+
+    SDL_RenderTextureRotated(state->renderer, state->color_texture, NULL, &canvas_rect, state->canvas_rotation,NULL,SDL_FLIP_NONE);
 
     SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
     
