@@ -6,7 +6,8 @@
 
 typedef enum WindowState {
     SELECTING,
-    MAIN
+    MAIN,
+    FINISH
 } WindowState;
 
 typedef struct AppState {
@@ -26,6 +27,7 @@ typedef struct AppState {
     size_t canvas_width;
     size_t canvas_height;
     uint64_t* color_timestamps;
+    uint32_t* color_timestamps_colors;
     uint32_t* color_pixels;
     SDL_Texture* color_texture;
     uint64_t canvas_starttime;
@@ -43,6 +45,8 @@ typedef struct AppState {
 
     TTF_Text* finish_button_text;
     SDL_FRect finish_button_rect;
+
+    TTF_Text* final_screen_text;
 } AppState;
 
 void initialize_canvas(AppState* state){
@@ -170,8 +174,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     state->finish_button_rect.w = fbrw+20;
     state->finish_button_rect.h = fbrh+10;
 
-    state->canvas_width  = 100;
-    state->canvas_height = 100;
+    state->final_screen_text = TTF_CreateText(state->text_engine,state->font,"You are did it I am so of proud of you!",0);
+
+    state->canvas_width  = 10;
+    state->canvas_height = 10;
     initialize_canvas(state);
 
     return SDL_APP_CONTINUE;
@@ -204,12 +210,31 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                                 break;
                             }
                         }
-                        if (!finished) {
+                        if (finished) {
+                            state->window_state = FINISH;
+
+                            uint64_t max_color = 0;
+                            uint64_t min_color = state->color_timestamps[0];
+                            for (size_t i = 0; i < (state->canvas_width*state->canvas_height); ++i) {
+                                if (state->color_timestamps[i] > max_color) max_color = state->color_timestamps[i];
+                                if (state->color_timestamps[i] < min_color) min_color = state->color_timestamps[i];
+                            }
+
+                            SDL_free(state->color_timestamps_colors);
+                            state->color_timestamps_colors = SDL_calloc(state->canvas_width*state->canvas_height, sizeof(uint32_t));
+
+                            for (size_t i = 0; i < (state->canvas_width*state->canvas_height); ++i) {
+                                const double val = (double)(state->color_timestamps[i] - min_color)/(double)max_color;
+                                const uint8_t cur_color = val * 255;
+                                state->color_timestamps_colors[i] = (cur_color << 24)|(cur_color << 16)|(cur_color << 8)|(255);
+                            }
+
+                        } else {
                             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,"you didnt finish","you did not finish please",state->window);
                         }
                         break;
                     }
-                    state->mouse_down = true;
+                    state->mouse_down = event->button.button == SDL_BUTTON_LEFT;
                     screen_to_canvas(state, event->button.x,event->button.y, &state->last_mouse_x, &state->last_mouse_y);
                     break;
                 }
@@ -355,6 +380,38 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
             SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
             SDL_RenderRect(state->renderer, &state->finish_button_rect);
             TTF_DrawRendererText(state->finish_button_text,state->window_width - state->finish_button_rect.w,state->window_height - (state->finish_button_rect.h-5));
+            break;
+        }
+        case FINISH: {
+            SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
+
+            SDL_UpdateTexture(state->color_texture,NULL,state->color_timestamps_colors,state->canvas_width * sizeof(uint32_t));
+
+            double zoom_factor = SDL_pow(2, state->canvas_zoom);
+
+            SDL_FRect canvas_rect = {
+                .w = state->canvas_width  * zoom_factor, 
+                .h = state->canvas_height * zoom_factor, 
+            };
+            canvas_rect.x = state->canvas_x + state->window_width/2  - canvas_rect.w/2;
+            canvas_rect.y = state->canvas_y + state->window_height/2 - canvas_rect.h/2;
+
+            SDL_RenderTextureRotated(state->renderer, state->color_texture, NULL, &canvas_rect, state->canvas_rotation,NULL,SDL_FLIP_NONE);
+
+            canvas_rect.x -= 2;
+            canvas_rect.y -= 2;
+            canvas_rect.w += 4;
+            canvas_rect.h += 4;
+
+            SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
+
+            SDL_RenderRect(state->renderer,&canvas_rect);
+
+            int final_text_width = 0;
+            int final_text_height = 0;
+            TTF_GetTextSize(state->final_screen_text,&final_text_width,&final_text_height);
+            TTF_DrawRendererText(state->final_screen_text,state->window_width/2 - final_text_width/2,state->window_height - final_text_height - 5);
+
             break;
         }
     }
