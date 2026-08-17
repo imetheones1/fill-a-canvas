@@ -47,6 +47,11 @@ typedef struct AppState {
     SDL_FRect finish_button_rect;
 
     TTF_Text* final_screen_text;
+
+    TTF_Text* rotate_buttons_text;
+    SDL_FRect rotate_button_right;
+    SDL_FRect rotate_button_left;
+    SDL_FRect rotate_button_reset;
 } AppState;
 
 void initialize_canvas(AppState* state){
@@ -171,10 +176,21 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         SDL_Log("Failed to measure text: %s",SDL_GetError());
         return SDL_APP_FAILURE;
     }
+
     state->finish_button_rect.w = fbrw+20;
     state->finish_button_rect.h = fbrh+10;
 
     state->final_screen_text = TTF_CreateText(state->text_engine,state->font,"You are did it I am so of proud of you!",0);
+    if (!state->final_screen_text) {
+        SDL_Log("Failed to create text object: %s",SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+
+    state->rotate_buttons_text = TTF_CreateText(state->text_engine,state->font,"<  Reset rotation  >",0);
+    if (!state->rotate_buttons_text) {
+        SDL_Log("Failed to create text object: %s",SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
 
     state->canvas_width  = 100;
     state->canvas_height = 100;
@@ -234,6 +250,17 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                         }
                         break;
                     }
+
+                    else if (is_inside_rect_rect(event->button.x,event->button.y,state->rotate_button_left)){
+                        state->canvas_rotation -= 10;
+                    }
+                    else if (is_inside_rect_rect(event->button.x,event->button.y,state->rotate_button_right)){
+                        state->canvas_rotation += 10;
+                    }
+                    else if (is_inside_rect_rect(event->button.x,event->button.y,state->rotate_button_reset)){
+                        state->canvas_rotation = 0;
+                    }
+
                     state->mouse_down = event->button.button == SDL_BUTTON_LEFT;
                     screen_to_canvas(state, event->button.x, event->button.y, &state->last_mouse_x, &state->last_mouse_y);
                     int lx = state->last_mouse_x, ly=state->last_mouse_y;
@@ -398,6 +425,37 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
             SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
             SDL_RenderRect(state->renderer, &state->finish_button_rect);
             TTF_DrawRendererText(state->finish_button_text,state->window_width - state->finish_button_rect.w,state->window_height - (state->finish_button_rect.h-5));
+
+
+            state->rotate_button_left = (SDL_FRect){
+                .h = 15, .w = 15,
+                .x = 7, .y = 7
+            };
+            SDL_SetRenderDrawColor(state->renderer, 0, 0, 0, 255);
+            SDL_RenderFillRect(state->renderer,&state->rotate_button_left);
+            SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
+            SDL_RenderRect(state->renderer,&state->rotate_button_left);
+
+            state->rotate_button_right = (SDL_FRect){
+                .h = 15, .w = 15,
+                .x = 128, .y = 7
+            };
+            SDL_SetRenderDrawColor(state->renderer, 0, 0, 0, 255);
+            SDL_RenderFillRect(state->renderer,&state->rotate_button_right);
+            SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
+            SDL_RenderRect(state->renderer,&state->rotate_button_right);
+
+            state->rotate_button_reset = (SDL_FRect){
+                .h = 21, .w = 100,
+                .x = 24, .y = 5
+            };
+            SDL_SetRenderDrawColor(state->renderer, 0, 0, 0, 255);
+            SDL_RenderFillRect(state->renderer,&state->rotate_button_reset);
+            SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
+            SDL_RenderRect(state->renderer,&state->rotate_button_reset);
+
+            SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
+            TTF_DrawRendererText(state->rotate_buttons_text, 10, 5);
             break;
         }
         case FINISH: {
