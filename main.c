@@ -244,6 +244,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                     }
                     break;
                 }
+                case FINISH: {
+                    state->mouse_down = event->button.button == SDL_BUTTON_LEFT;
+                }
             }
             break;
         }
@@ -253,6 +256,15 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         }
         case SDL_EVENT_MOUSE_MOTION: {
             if (!state->mouse_down) break;
+
+            const bool *key_state = SDL_GetKeyboardState(NULL);
+            if (key_state[SDL_SCANCODE_SPACE]) {
+                state->canvas_x += event->motion.xrel;
+                state->canvas_y += event->motion.yrel;
+
+                break;
+            }
+
             double mx = 0, my = 0;
             screen_to_canvas(state, event->motion.x,event->motion.y, &mx, &my);
 
