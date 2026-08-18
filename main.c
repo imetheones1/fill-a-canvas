@@ -192,11 +192,23 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
-    state->canvas_width  = 100;
-    state->canvas_height = 100;
+    state->canvas_width  = 10;
+    state->canvas_height = 10;
     initialize_canvas(state);
 
     return SDL_APP_CONTINUE;
+}
+
+typedef struct Vector3 {
+    double x,y,z;
+} Vector3;
+
+Vector3 cosine_palette(double t, Vector3 a, Vector3 b, Vector3 c, Vector3 d) {
+    return (Vector3){
+        .x = a.x + b.x * SDL_cos(SDL_PI_D*2 * (c.x * t + d.x)),
+        .y = a.y + b.y * SDL_cos(SDL_PI_D*2 * (c.y * t + d.y)),
+        .z = a.z + b.z * SDL_cos(SDL_PI_D*2 * (c.z * t + d.z))
+    };
 }
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
@@ -239,10 +251,20 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                             SDL_free(state->color_timestamps_colors);
                             state->color_timestamps_colors = SDL_calloc(state->canvas_width*state->canvas_height, sizeof(uint32_t));
 
+                            Vector3 a = {0.5, 0.5, 0.5};
+                            Vector3 b = {0.5, 0.5, 0.5};
+                            Vector3 c = {0.5, 0.5, 0.3};
+                            Vector3 d = {0.0, 0.33, 0.66};
+
                             for (size_t i = 0; i < (state->canvas_width*state->canvas_height); ++i) {
                                 const double val = (double)(state->color_timestamps[i] - min_color)/(double)max_color;
+                                Vector3 color = cosine_palette(SDL_clamp(val,0,1),a,b,c,d);
+                                uint32_t r_v = color.x * 255.0;
+                                uint32_t g_v = color.y * 255.0;
+                                uint32_t b_v = color.z * 255.0;
+
                                 const uint8_t cur_color = val * 255;
-                                state->color_timestamps_colors[i] = (cur_color << 24)|(cur_color << 16)|(cur_color << 8)|(255);
+                                state->color_timestamps_colors[i] = (r_v << 24)|(g_v << 16)|(b_v << 8)|(255);
                             }
 
                         } else {
