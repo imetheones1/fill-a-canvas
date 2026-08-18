@@ -367,6 +367,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     return SDL_APP_CONTINUE;
 }
 
+#define deg2rad(deg) ((deg * SDL_PI_D)/180.0);
+
 SDL_AppResult SDL_AppIterate(void *appstate) {
     AppState *state = (AppState *)appstate;
 
@@ -407,14 +409,31 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
             SDL_RenderTextureRotated(state->renderer, state->color_texture, NULL, &canvas_rect, state->canvas_rotation,NULL,SDL_FLIP_NONE);
 
-            canvas_rect.x -= 2;
-            canvas_rect.y -= 2;
-            canvas_rect.w += 4;
-            canvas_rect.h += 4;
+            const float canvas_rotation_rad = deg2rad(state->canvas_rotation);
+
+            const float cosA = SDL_cosf(canvas_rotation_rad);
+            const float sinA = SDL_sinf(canvas_rotation_rad);
+
+            const float hx = canvas_rect.w / 2.0f;
+            const float hy = canvas_rect.h / 2.0f;
+
+            const float cx = canvas_rect.x + hx;
+            const float cy = canvas_rect.y + hy;
+
+            const int o = 2;
+            const float cornersX[4] = { -hx - o,  hx + o, hx + o, -hx - o };
+            const float cornersY[4] = { -hy - o, -hy - o, hy + o,  hy + o };
+
+            SDL_FPoint border[5];
+            for (int i = 0; i < 4; i++) {
+
+                border[i].x = (int)(cx + (cornersX[i] * cosA - cornersY[i] * sinA));
+                border[i].y = (int)(cy + (cornersX[i] * sinA + cornersY[i] * cosA));
+            }
+            border[4] = border[0];
 
             SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
-
-            SDL_RenderRect(state->renderer,&canvas_rect);
+            SDL_RenderLines(state->renderer,border,5);
 
             state->finish_button_rect.x = state->window_width - state->ready_button_rect.w - 20;
             state->finish_button_rect.y = state->window_height - state->ready_button_rect.h;
