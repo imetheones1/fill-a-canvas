@@ -126,6 +126,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         SDL_Log("Failed to create window and renderer: %s",SDL_GetError());
         return SDL_APP_FAILURE;
     }
+    SDL_SetRenderVSync(state->renderer,1);
 
     state->window_state = SELECTING;
 
@@ -192,8 +193,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
-    state->canvas_width  = 10;
-    state->canvas_height = 10;
+    state->canvas_width  = 100;
+    state->canvas_height = 100;
     initialize_canvas(state);
 
     return SDL_APP_CONTINUE;
@@ -285,11 +286,13 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 
                     state->mouse_down = event->button.button == SDL_BUTTON_LEFT;
                     screen_to_canvas(state, event->button.x, event->button.y, &state->last_mouse_x, &state->last_mouse_y);
-                    int lx = state->last_mouse_x, ly=state->last_mouse_y;
-                    if (is_inside_rect(lx,ly,0,0,state->canvas_width,state->canvas_height)) {
-                        size_t index = ly * state->canvas_width + lx;
-                        if (state->color_timestamps && state->color_timestamps[index] == 0) state->color_timestamps[index] = event->motion.timestamp-state->canvas_starttime + 1;
-                        if (state->color_pixels) state->color_pixels[index] = 0xFF000000;
+                    if (state->mouse_down) {
+                        int lx = state->last_mouse_x, ly=state->last_mouse_y;
+                        if (is_inside_rect(lx,ly,0,0,state->canvas_width,state->canvas_height)) {
+                            size_t index = ly * state->canvas_width + lx;
+                            if (state->color_timestamps && state->color_timestamps[index] == 0) state->color_timestamps[index] = event->motion.timestamp-state->canvas_starttime + 1;
+                            if (state->color_pixels) state->color_pixels[index] = 0xFF000000;
+                        }
                     }
                     break;
                 }
