@@ -49,8 +49,14 @@ add_executable(my_game main.c)
 target_link_libraries(my_game PRIVATE SDL3::SDL3 SDL3_ttf::SDL3_ttf)
 
 if(EMSCRIPTEN)
-    set_target_properties(my_game PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
+    set_target_properties(my_game PROPERTIES
+        OUTPUT_NAME "index"
+        SUFFIX ".html"
+        # Relink when the shell page changes
+        LINK_DEPENDS "${CMAKE_SOURCE_DIR}/shell.html"
+    )
     target_link_options(my_game PRIVATE
+        "--shell-file" "${CMAKE_SOURCE_DIR}/shell.html"
         "-sUSE_WEBGL2=1"
         "-sALLOW_MEMORY_GROWTH=1"
         "--preload-file" "${CMAKE_SOURCE_DIR}/Roboto-Regular.ttf@/Roboto-Regular.ttf"
