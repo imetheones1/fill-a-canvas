@@ -1,0 +1,5 @@
+source ./emsdk/emsdk_env.sh
+
+emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build
