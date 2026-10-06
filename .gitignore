@@ -53,3 +53,6 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Release builds are committed so the site can be hosted straight from dist/
+!dist/*.exe

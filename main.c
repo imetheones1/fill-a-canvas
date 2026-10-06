@@ -8,6 +8,17 @@
 #include <emscripten.h>
 #endif
 
+// Generated from Roboto-Regular.ttf by CMake, so the font is built into the program
+extern const unsigned char roboto_regular_ttf[];
+extern const size_t roboto_regular_ttf_size;
+
+#define GITHUB_URL "https://github.com/imetheones1/fill-a-canvas"
+#define WEB_URL "https://fill-a-canvas.imetheones1.com"
+#define LICENSE_URL WEB_URL "/OFL.txt"
+// Relative to the page, since the .exe is hosted alongside the web build
+#define EXE_DOWNLOAD_PATH "fill-a-canvas.exe"
+#define INFO_TEXT "so you fill in a canvas with a one pixel wide brush. how big is the canvas? you choose. how big is the brush? one pixel. you do that and you have fun and such. built in c with SDL3"
+
 static const int canvas_size_presets[] = {8, 16, 32, 50, 64, 100, 128, 200, 256, 512};
 #define CANVAS_SIZE_PRESET_COUNT (int)SDL_arraysize(canvas_size_presets)
 // 4096 is the largest texture size WebGL reliably supports
@@ -21,6 +32,7 @@ static const int canvas_size_presets[] = {8, 16, 32, 50, 64, 100, 128, 200, 256,
 
 typedef enum Screen {
     SCREEN_INTRO,
+    SCREEN_INFO,
     SCREEN_DRAWING,
     SCREEN_FINISHED
 } Screen;
@@ -92,6 +104,15 @@ typedef struct AppState {
     Button width_up_button;
     Button height_down_button;
     Button height_up_button;
+    Button info_button;
+
+    TTF_Text *info_text;
+    float info_text_y;
+    Button github_button;
+    Button other_version_button;
+    // Desktop only; the web build already serves OFL.txt next to the page
+    Button license_button;
+    Button back_button;
 
     Button finish_button;
     Button rotate_left_button;
@@ -105,6 +126,10 @@ typedef struct AppState {
     Button save_drawing_button;
     Button save_timestamps_button;
 } AppState;
+
+bool showing_canvas(AppState *state) {
+    return state->screen == SCREEN_DRAWING || state->screen == SCREEN_FINISHED;
+}
 
 void screen_to_canvas(AppState *state, double screen_x, double screen_y, double *out_canvas_x, double *out_canvas_y) {
     double dx = screen_x - (state->window_width / 2.0 + state->canvas_x);
@@ -444,6 +469,8 @@ bool create_arrow_button(AppState *state, Button *button, const char *label) {
 }
 
 bool button_clicked(const Button *button, float x, float y) {
+    if (!button->text) return false;
+
     const SDL_FPoint point = { x, y };
     return SDL_PointInRectFloat(&point, &button->rect);
 }
@@ -475,6 +502,26 @@ void layout(AppState *state) {
     place_size_row(state, size_rows_y, &state->width_field, &state->width_down_button, &state->width_up_button);
     place_size_row(state, size_rows_y + state->width_down_button.rect.h + 6, &state->height_field, &state->height_down_button, &state->height_up_button);
 
+    state->info_button.rect.x = w - state->info_button.rect.w - 10;
+    state->info_button.rect.y = 10;
+
+    state->back_button.rect.x = 10;
+    state->back_button.rect.y = 10;
+
+    // Wrap to the window on phones, but keep lines readable on wide screens
+    TTF_SetTextWrapWidth(state->info_text, (int)SDL_min(w - 40, 500));
+    int info_w = 0, info_h = 0;
+    TTF_GetTextSize(state->info_text, &info_w, &info_h);
+    float info_block_h = info_h + 20 + state->github_button.rect.h + 10 + state->other_version_button.rect.h;
+    if (state->license_button.text) info_block_h += 10 + state->license_button.rect.h;
+    state->info_text_y = h/2 - info_block_h/2;
+    state->github_button.rect.x = w/2 - state->github_button.rect.w/2;
+    state->github_button.rect.y = state->info_text_y + info_h + 20;
+    state->other_version_button.rect.x = w/2 - state->other_version_button.rect.w/2;
+    state->other_version_button.rect.y = state->github_button.rect.y + state->github_button.rect.h + 10;
+    state->license_button.rect.x = w/2 - state->license_button.rect.w/2;
+    state->license_button.rect.y = state->other_version_button.rect.y + state->other_version_button.rect.h + 10;
+
     state->rotate_left_button.rect.x = 10;
     state->rotate_left_button.rect.y = 10;
     state->rotate_reset_button.rect.x = state->rotate_left_button.rect.x + state->rotate_left_button.rect.w + 5;
@@ -496,7 +543,7 @@ void layout(AppState *state) {
 
 void update_cursor(AppState *state) {
     const bool *key_state = SDL_GetKeyboardState(NULL);
-    const bool want_move_cursor = state->screen != SCREEN_INTRO && (state->panning || key_state[SDL_SCANCODE_SPACE]);
+    const bool want_move_cursor = showing_canvas(state) && (state->panning || key_state[SDL_SCANCODE_SPACE]);
     if (want_move_cursor != state->showing_move_cursor && state->move_cursor) {
         SDL_SetCursor(want_move_cursor ? state->move_cursor : SDL_GetDefaultCursor());
         state->showing_move_cursor = want_move_cursor;
@@ -587,8 +634,17 @@ void draw_intro_screen(AppState *state) {
     draw_text_centered(state->intro_text, state->window_width/2.0f, state->window_height/2.0f - th/2.0f);
 
     draw_button(state, &state->ready_button);
+    draw_button(state, &state->info_button);
     draw_size_row(state, state->width_text,  &state->width_field,  state->editing_field == SIZE_FIELD_WIDTH,  &state->width_down_button,  &state->width_up_button);
     draw_size_row(state, state->height_text, &state->height_field, state->editing_field == SIZE_FIELD_HEIGHT, &state->height_down_button, &state->height_up_button);
+}
+
+void draw_info_screen(AppState *state) {
+    draw_text_centered(state->info_text, state->window_width/2.0f, state->info_text_y);
+    draw_button(state, &state->github_button);
+    draw_button(state, &state->other_version_button);
+    if (state->license_button.text) draw_button(state, &state->license_button);
+    draw_button(state, &state->back_button);
 }
 
 void draw_drawing_screen(AppState *state) {
@@ -629,6 +685,7 @@ void on_intro_click(AppState *state, const SDL_MouseButtonEvent *button) {
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "couldn't make the canvas", SDL_GetError(), state->window);
         }
     }
+    else if (button_clicked(&state->info_button, x, y))        state->screen = SCREEN_INFO;
     else if (button_clicked(&state->width_down_button, x, y))  state->chosen_width  = next_preset_down(state->chosen_width);
     else if (button_clicked(&state->width_up_button, x, y))    state->chosen_width  = next_preset_up(state->chosen_width);
     else if (button_clicked(&state->height_down_button, x, y)) state->chosen_height = next_preset_down(state->chosen_height);
@@ -637,6 +694,28 @@ void on_intro_click(AppState *state, const SDL_MouseButtonEvent *button) {
     else if (SDL_PointInRectFloat(&(SDL_FPoint){ x, y }, &state->height_field)) start_size_edit(state, SIZE_FIELD_HEIGHT);
 
     update_size_text(state);
+}
+
+void open_other_version(void) {
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+    EM_ASM({
+        const link = document.createElement('a');
+        link.href = UTF8ToString($0);
+        link.download = UTF8ToString($0);
+        link.click();
+    }, EXE_DOWNLOAD_PATH);
+#else
+    SDL_OpenURL(WEB_URL);
+#endif
+}
+
+void on_info_click(AppState *state, const SDL_MouseButtonEvent *button) {
+    const float x = button->x, y = button->y;
+
+    if (button_clicked(&state->github_button, x, y))             SDL_OpenURL(GITHUB_URL);
+    else if (button_clicked(&state->other_version_button, x, y)) open_other_version();
+    else if (button_clicked(&state->license_button, x, y))       SDL_OpenURL(LICENSE_URL);
+    else if (button_clicked(&state->back_button, x, y))          state->screen = SCREEN_INTRO;
 }
 
 void on_drawing_click(AppState *state, const SDL_MouseButtonEvent *button) {
@@ -779,10 +858,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
-    char *font_path = NULL;
-    SDL_asprintf(&font_path, "%s%s", SDL_GetBasePath(), "Roboto-Regular.ttf");
-    state->font = font_path ? TTF_OpenFont(font_path, 16) : NULL;
-    SDL_free(font_path);
+    state->font = TTF_OpenFontIO(SDL_IOFromConstMem(roboto_regular_ttf, roboto_regular_ttf_size), true, 16);
     if (!state->font) {
         SDL_Log("Failed to load font: %s",SDL_GetError());
         return SDL_APP_FAILURE;
@@ -795,10 +871,20 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     state->height_text = create_text(state, "");
     state->zoom_text = create_text(state, "");
     state->final_screen_text = create_text(state, "You are did it I am so of proud of you!");
+    state->info_text = create_text(state, INFO_TEXT);
 
     const bool created =
-        state->intro_text && state->width_text && state->height_text && state->zoom_text && state->final_screen_text &&
+        state->intro_text && state->width_text && state->height_text && state->zoom_text && state->final_screen_text && state->info_text &&
         create_button(state, &state->ready_button, "yeah i'm ready") &&
+        create_button(state, &state->info_button, "info") &&
+        create_button(state, &state->github_button, "view on github") &&
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+        create_button(state, &state->other_version_button, "download for windows") &&
+#else
+        create_button(state, &state->other_version_button, "play in browser") &&
+        create_button(state, &state->license_button, "font license (OFL)") &&
+#endif
+        create_button(state, &state->back_button, "back") &&
         create_arrow_button(state, &state->width_down_button, "<") &&
         create_arrow_button(state, &state->width_up_button, ">") &&
         create_arrow_button(state, &state->height_down_button, "<") &&
@@ -829,7 +915,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     AppState *state = (AppState *)appstate;
-    const bool viewing_canvas = state->screen != SCREEN_INTRO;
+    const bool viewing_canvas = showing_canvas(state);
 
     switch (event->type) {
         case SDL_EVENT_QUIT: {
@@ -843,6 +929,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 
             switch (state->screen) {
                 case SCREEN_INTRO:    on_intro_click(state, &event->button);    break;
+                case SCREEN_INFO:     on_info_click(state, &event->button);     break;
                 case SCREEN_DRAWING:  on_drawing_click(state, &event->button);  break;
                 case SCREEN_FINISHED: on_finished_click(state, &event->button); break;
             }
@@ -895,6 +982,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
         }
         case SDL_EVENT_KEY_DOWN: {
             if (state->editing_field != SIZE_FIELD_NONE) on_size_edit_key(state, event->key.key);
+            else if (state->screen == SCREEN_INFO && event->key.key == SDLK_ESCAPE) state->screen = SCREEN_INTRO;
             else if (viewing_canvas) on_view_key(state, &event->key);
             break;
         }
@@ -945,7 +1033,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
 #ifdef SDL_PLATFORM_EMSCRIPTEN
     const double pinch_zoom = take_pinch_zoom();
-    if (pinch_zoom != 0 && state->screen != SCREEN_INTRO) {
+    if (pinch_zoom != 0 && showing_canvas(state)) {
         float mx, my;
         SDL_GetMouseState(&mx, &my);
         zoom_at(state, mx, my, pinch_zoom);
@@ -961,6 +1049,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     switch (state->screen) {
         case SCREEN_INTRO:    draw_intro_screen(state);    break;
+        case SCREEN_INFO:     draw_info_screen(state);     break;
         case SCREEN_DRAWING:  draw_drawing_screen(state);  break;
         case SCREEN_FINISHED: draw_finished_screen(state); break;
     }
