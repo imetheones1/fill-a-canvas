@@ -4,6 +4,10 @@
 
 #include <SDL3_ttf/SDL_ttf.h>
 
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+#include <emscripten.h>
+#endif
+
 static const int canvas_size_presets[] = {8, 16, 32, 50, 64, 100, 128, 200, 256, 512};
 #define CANVAS_SIZE_PRESET_COUNT (int)SDL_arraysize(canvas_size_presets)
 // 4096 is the largest texture size WebGL reliably supports
@@ -58,6 +62,11 @@ typedef struct AppState {
     SDL_FRect finish_button_rect;
 
     TTF_Text* final_screen_text;
+
+    TTF_Text* save_drawing_text;
+    SDL_FRect save_drawing_rect;
+    TTF_Text* save_timestamps_text;
+    SDL_FRect save_timestamps_rect;
 
     TTF_Text* rotate_buttons_text;
     SDL_FRect rotate_button_right;
@@ -184,6 +193,73 @@ void screen_to_canvas(AppState *state ,double screen_x, double screen_y, double*
     *out_canvas_y = sy + (state->canvas_height / 2.0);
 }
 
+SDL_Surface* surface_from_pixels(size_t width, size_t height, const uint32_t *pixels) {
+    return SDL_CreateSurfaceFrom((int)width, (int)height, SDL_PIXELFORMAT_RGBA8888, (void *)pixels, (int)(width * sizeof(uint32_t)));
+}
+
+#ifndef SDL_PLATFORM_EMSCRIPTEN
+typedef struct SaveRequest {
+    size_t width, height;
+    const uint32_t *pixels;
+} SaveRequest;
+
+void SDLCALL save_dialog_callback(void *userdata, const char * const *filelist, int filter) {
+    SaveRequest *request = userdata;
+
+    if (!filelist) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "couldn't save", SDL_GetError(), NULL);
+    } else if (filelist[0]) {
+        char *path = NULL;
+        const size_t len = SDL_strlen(filelist[0]);
+        if (len >= 4 && SDL_strcasecmp(filelist[0] + len - 4, ".png") == 0) {
+            path = SDL_strdup(filelist[0]);
+        } else {
+            SDL_asprintf(&path, "%s.png", filelist[0]);
+        }
+
+        SDL_Surface *surface = surface_from_pixels(request->width, request->height, request->pixels);
+        if (!surface || !SDL_SavePNG(surface, path)) {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "couldn't save", SDL_GetError(), NULL);
+        }
+        SDL_DestroySurface(surface);
+        SDL_free(path);
+    }
+
+    SDL_free(request);
+}
+#endif
+
+void save_image(AppState *state, const uint32_t *pixels, const char *filename) {
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+    // Browsers have no save dialog, so encode the PNG in memory and hand it over as a download
+    SDL_Surface *surface = surface_from_pixels(state->canvas_width, state->canvas_height, pixels);
+    SDL_IOStream *io = SDL_IOFromDynamicMem();
+    if (surface && io && SDL_SavePNG_IO(surface, io, false)) {
+        const void *data = SDL_GetPointerProperty(SDL_GetIOProperties(io), SDL_PROP_IOSTREAM_DYNAMIC_MEMORY_POINTER, NULL);
+        const int size = (int)SDL_TellIO(io);
+        EM_ASM({
+            const blob = new Blob([HEAPU8.slice($0, $0 + $1)], { type: 'image/png' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = UTF8ToString($2);
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+        }, data, size, filename);
+    } else {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "couldn't save", SDL_GetError(), state->window);
+    }
+    SDL_CloseIO(io);
+    SDL_DestroySurface(surface);
+#else
+    SaveRequest *request = SDL_malloc(sizeof(SaveRequest));
+    if (!request) return;
+    *request = (SaveRequest){ .width = state->canvas_width, .height = state->canvas_height, .pixels = pixels };
+
+    static const SDL_DialogFileFilter filters[] = { { "PNG image", "png" } };
+    SDL_ShowSaveFileDialog(save_dialog_callback, request, state->window, filters, SDL_arraysize(filters), filename);
+#endif
+}
+
 #define is_inside_rect(x,y,rx,ry,rw,rh) ((x)>=(rx)&&(x)<((rx)+(rw))&&(y)>=(ry)&&(y)<((ry)+(rh)))
 #define is_inside_rect_rect(cx,cy,rect) is_inside_rect((cx),(cy),(rect).x,(rect).y,(rect).w,(rect).h)
 
@@ -278,6 +354,19 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         SDL_Log("Failed to create text object: %s",SDL_GetError());
         return SDL_APP_FAILURE;
     }
+
+    state->save_drawing_text = TTF_CreateText(state->text_engine,state->font,"save drawing",0);
+    state->save_timestamps_text = TTF_CreateText(state->text_engine,state->font,"save timestamps",0);
+    if (!state->save_drawing_text || !state->save_timestamps_text) {
+        SDL_Log("Failed to create text object: %s",SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+
+    int sdw, sdh, stw, sth;
+    TTF_GetTextSize(state->save_drawing_text,&sdw,&sdh);
+    TTF_GetTextSize(state->save_timestamps_text,&stw,&sth);
+    state->save_drawing_rect    = (SDL_FRect){ .x = 10, .y = 10,           .w = sdw+20, .h = sdh+10 };
+    state->save_timestamps_rect = (SDL_FRect){ .x = 10, .y = 20 + sdh+10,  .w = stw+20, .h = sth+10 };
 
     state->rotate_buttons_text = TTF_CreateText(state->text_engine,state->font,"<  Reset rotation  >",0);
     if (!state->rotate_buttons_text) {
@@ -410,13 +499,23 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                         if (is_inside_rect(lx,ly,0,0,state->canvas_width,state->canvas_height)) {
                             size_t index = ly * state->canvas_width + lx;
                             if (state->color_timestamps && state->color_timestamps[index] == 0) state->color_timestamps[index] = event->button.timestamp-state->canvas_starttime + 1;
-                            if (state->color_pixels) state->color_pixels[index] = 0xFF000000;
+                            if (state->color_pixels) state->color_pixels[index] = 0x000000FF;
                         }
                     }
                     break;
                 }
                 case FINISH: {
-                    state->mouse_down = event->button.button == SDL_BUTTON_LEFT;
+                    const float bx = event->button.x, by = event->button.y;
+                    if (is_inside_rect_rect(bx,by,state->save_drawing_rect)) {
+                        save_image(state, state->color_pixels, "fill-a-canvas.png");
+                    }
+                    else if (is_inside_rect_rect(bx,by,state->save_timestamps_rect)) {
+                        save_image(state, state->color_timestamps_colors, "fill-a-canvas-timestamps.png");
+                    }
+                    else {
+                        state->mouse_down = event->button.button == SDL_BUTTON_LEFT;
+                    }
+                    break;
                 }
             }
             break;
@@ -495,7 +594,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                 if (is_inside_rect(x0,y0,0,0,state->canvas_width,state->canvas_height)) {
                     size_t index = y0 * state->canvas_width + x0;
                     if (state->color_timestamps && state->color_timestamps[index] == 0) state->color_timestamps[index] = event->motion.timestamp-state->canvas_starttime + 1;
-                    if (state->color_pixels) state->color_pixels[index] = 0xFF000000;
+                    if (state->color_pixels) state->color_pixels[index] = 0x000000FF;
                 }
                 
                 if (x0 == x1 && y0 == y1) break;
@@ -708,6 +807,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
             TTF_GetTextSize(state->final_screen_text,&final_text_width,&final_text_height);
             TTF_DrawRendererText(state->final_screen_text,state->window_width/2 - final_text_width/2,state->window_height - final_text_height - 5);
 
+            draw_button(state, state->save_drawing_rect, state->save_drawing_text);
+            draw_button(state, state->save_timestamps_rect, state->save_timestamps_text);
+
             break;
         }
     }
@@ -724,6 +826,8 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         TTF_DestroyText(state->ready_button_text);
         TTF_DestroyText(state->finish_button_text);
         TTF_DestroyText(state->final_screen_text);
+        TTF_DestroyText(state->save_drawing_text);
+        TTF_DestroyText(state->save_timestamps_text);
         TTF_DestroyText(state->rotate_buttons_text);
         TTF_DestroyText(state->width_text);
         TTF_DestroyText(state->height_text);
