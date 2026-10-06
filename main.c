@@ -52,6 +52,18 @@ typedef struct AppState {
     double canvas_rotation;
 
     bool mouse_down;
+    bool panning;
+
+    SDL_FingerID gesture_fingers[2];
+    SDL_FPoint gesture_points[2];
+    int gesture_finger_count;
+    bool has_native_pinch;
+
+    SDL_Cursor* move_cursor;
+    bool showing_move_cursor;
+
+    TTF_Text* zoom_text;
+    int zoom_text_percent;
     double last_mouse_x;
     double last_mouse_y;
 
@@ -62,6 +74,9 @@ typedef struct AppState {
     SDL_FRect finish_button_rect;
 
     TTF_Text* final_screen_text;
+
+    TTF_Text* reset_view_text;
+    SDL_FRect reset_view_rect;
 
     TTF_Text* save_drawing_text;
     SDL_FRect save_drawing_rect;
@@ -141,6 +156,14 @@ int next_preset_down(int value) {
     return value;
 }
 
+void reset_view(AppState* state) {
+    const double fit_w = state->window_width  * 0.8 / state->canvas_width;
+    const double fit_h = state->window_height * 0.8 / state->canvas_height;
+    state->canvas_zoom = SDL_log(SDL_min(fit_w, fit_h)) / SDL_log(2.0);
+    state->canvas_x = 0;
+    state->canvas_y = 0;
+}
+
 void initialize_canvas(AppState* state){
     SDL_free(state->color_timestamps);
     state->color_timestamps = NULL;
@@ -161,11 +184,7 @@ void initialize_canvas(AppState* state){
     );
     SDL_SetTextureScaleMode(state->color_texture,SDL_SCALEMODE_PIXELART);
 
-    const double fit_w = state->window_width  * 0.8 / state->canvas_width;
-    const double fit_h = state->window_height * 0.8 / state->canvas_height;
-    state->canvas_zoom = SDL_log(SDL_min(fit_w, fit_h)) / SDL_log(2.0);
-    state->canvas_x = 0;
-    state->canvas_y = 0;
+    reset_view(state);
     state->canvas_rotation = 0;
 
     state->canvas_starttime = SDL_GetTicksNS();
@@ -191,6 +210,66 @@ void screen_to_canvas(AppState *state ,double screen_x, double screen_y, double*
 
     *out_canvas_x = sx + (state->canvas_width / 2.0);
     *out_canvas_y = sy + (state->canvas_height / 2.0);
+}
+
+// Changes zoom (in powers of two) while keeping the canvas point under (screen_x, screen_y) in place
+void zoom_at(AppState *state, double screen_x, double screen_y, double zoom_change) {
+    double cx, cy;
+    screen_to_canvas(state, screen_x, screen_y, &cx, &cy);
+
+    // Stop at 16 screen pixels for the whole canvas, or 128 screen pixels per canvas pixel,
+    // so the canvas can't be zoomed out of sight or into a single pixel filling the screen
+    const double min_zoom = SDL_log(16.0 / SDL_max(state->canvas_width, state->canvas_height)) / SDL_log(2.0);
+    state->canvas_zoom = SDL_clamp(state->canvas_zoom + zoom_change, SDL_min(min_zoom, state->canvas_zoom), SDL_max(7.0, state->canvas_zoom));
+
+    double scale = SDL_pow(2, state->canvas_zoom);
+    double rad = state->canvas_rotation * (SDL_PI_F / 180.0);
+    double cos_theta = SDL_cos(rad);
+    double sin_theta = SDL_sin(rad);
+
+    double sx = cx - (state->canvas_width / 2.0);
+    double sy = cy - (state->canvas_height / 2.0);
+
+    double rx = sx * scale;
+    double ry = sy * scale;
+
+    double dx = (rx * cos_theta) - (ry * sin_theta);
+    double dy = (rx * sin_theta) + (ry * cos_theta);
+
+    state->canvas_x = screen_x - dx - (state->window_width / 2.0);
+    state->canvas_y = screen_y - dy - (state->window_height / 2.0);
+}
+
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+// Browsers report trackpad pinches as ctrl+wheel events with tiny deltas. The ctrl isn't a real
+// key press, so SDL can't tell them apart from scrolling; catch them first and collect the zoom here.
+EM_JS(void, install_pinch_listener, (), {
+    Module.pinchZoom = 0;
+    window.addEventListener('wheel', (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        let dy = e.deltaY;
+        if (e.deltaMode === 1) dy *= 33;
+        else if (e.deltaMode === 2) dy *= 800;
+        // Pinch steps are a few pixels; a ctrl+mouse-wheel notch is ~100 and would jump too far
+        dy = Math.max(-30, Math.min(30, dy));
+        Module.pinchZoom -= dy / 100 / Math.LN2;
+    }, { capture: true, passive: false });
+});
+
+EM_JS(double, take_pinch_zoom, (), {
+    const zoom = Module.pinchZoom;
+    Module.pinchZoom = 0;
+    return zoom;
+});
+#endif
+
+int find_gesture_finger(AppState *state, SDL_FingerID id) {
+    for (int i = 0; i < state->gesture_finger_count; ++i) {
+        if (state->gesture_fingers[i] == id) return i;
+    }
+    return -1;
 }
 
 SDL_Surface* surface_from_pixels(size_t width, size_t height, const uint32_t *pixels) {
@@ -355,6 +434,18 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         return SDL_APP_FAILURE;
     }
 
+    state->reset_view_text = TTF_CreateText(state->text_engine,state->font,"reset view",0);
+    state->zoom_text = TTF_CreateText(state->text_engine,state->font,"",0);
+    if (!state->reset_view_text || !state->zoom_text) {
+        SDL_Log("Failed to create text object: %s",SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+
+    int rvw, rvh;
+    TTF_GetTextSize(state->reset_view_text,&rvw,&rvh);
+    state->reset_view_rect.w = rvw+20;
+    state->reset_view_rect.h = rvh+10;
+
     state->save_drawing_text = TTF_CreateText(state->text_engine,state->font,"save drawing",0);
     state->save_timestamps_text = TTF_CreateText(state->text_engine,state->font,"save timestamps",0);
     if (!state->save_drawing_text || !state->save_timestamps_text) {
@@ -391,6 +482,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     state->canvas_height = state->chosen_height;
     initialize_canvas(state);
 
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+    install_pinch_listener();
+#endif
+
+    state->move_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
+
     return SDL_APP_CONTINUE;
 }
 
@@ -414,6 +511,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+            if (state->window_state != SELECTING && (event->button.button == SDL_BUTTON_MIDDLE || event->button.button == SDL_BUTTON_RIGHT)) {
+                state->panning = true;
+                break;
+            }
+
             switch (state->window_state){
                 case SELECTING: {
                     // if (is_inside_rect(event->button.x,event->button.y,state->ready_button_rect.x,state->ready_button_rect.y,state->ready_button_rect.w,state->ready_button_rect.h)) {
@@ -484,15 +586,22 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 
                     else if (is_inside_rect_rect(event->button.x,event->button.y,state->rotate_button_left)){
                         state->canvas_rotation -= 10;
+                        break;
                     }
                     else if (is_inside_rect_rect(event->button.x,event->button.y,state->rotate_button_right)){
                         state->canvas_rotation += 10;
+                        break;
                     }
                     else if (is_inside_rect_rect(event->button.x,event->button.y,state->rotate_button_reset)){
                         state->canvas_rotation = 0;
+                        break;
+                    }
+                    else if (is_inside_rect_rect(event->button.x,event->button.y,state->reset_view_rect)){
+                        reset_view(state);
+                        break;
                     }
 
-                    state->mouse_down = event->button.button == SDL_BUTTON_LEFT;
+                    state->mouse_down = event->button.button == SDL_BUTTON_LEFT && state->gesture_finger_count < 2;
                     screen_to_canvas(state, event->button.x, event->button.y, &state->last_mouse_x, &state->last_mouse_y);
                     if (state->mouse_down) {
                         int lx = (int)SDL_floor(state->last_mouse_x), ly = (int)SDL_floor(state->last_mouse_y);
@@ -511,6 +620,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
                     }
                     else if (is_inside_rect_rect(bx,by,state->save_timestamps_rect)) {
                         save_image(state, state->color_timestamps_colors, "fill-a-canvas-timestamps.png");
+                    }
+                    else if (is_inside_rect_rect(bx,by,state->reset_view_rect)) {
+                        reset_view(state);
                     }
                     else {
                         state->mouse_down = event->button.button == SDL_BUTTON_LEFT;
@@ -533,7 +645,27 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             break;
         }
         case SDL_EVENT_KEY_DOWN: {
-            if (state->editing_field == SIZE_FIELD_NONE) break;
+            if (state->editing_field == SIZE_FIELD_NONE) {
+                if (state->window_state == SELECTING || !(event->key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI))) break;
+
+                const double cx = state->window_width / 2.0, cy = state->window_height / 2.0;
+                switch (event->key.key) {
+                    case SDLK_EQUALS:
+                    case SDLK_PLUS:
+                    case SDLK_KP_PLUS:
+                        zoom_at(state, cx, cy, 0.5);
+                        break;
+                    case SDLK_MINUS:
+                    case SDLK_KP_MINUS:
+                        zoom_at(state, cx, cy, -0.5);
+                        break;
+                    case SDLK_0:
+                    case SDLK_KP_0:
+                        reset_view(state);
+                        break;
+                }
+                break;
+            }
             size_t len = SDL_strlen(state->edit_buffer);
             switch (event->key.key) {
                 case SDLK_BACKSPACE:
@@ -559,19 +691,22 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             break;
         }
         case SDL_EVENT_MOUSE_BUTTON_UP: {
-            state->mouse_down = false;
+            if (event->button.button == SDL_BUTTON_LEFT) state->mouse_down = false;
+            else if (event->button.button == SDL_BUTTON_MIDDLE || event->button.button == SDL_BUTTON_RIGHT) state->panning = false;
             break;
         }
         case SDL_EVENT_MOUSE_MOTION: {
-            if (!state->mouse_down) break;
-
             const bool *key_state = SDL_GetKeyboardState(NULL);
-            if (key_state[SDL_SCANCODE_SPACE]) {
+            if (state->panning || (state->mouse_down && key_state[SDL_SCANCODE_SPACE])) {
                 state->canvas_x += event->motion.xrel;
                 state->canvas_y += event->motion.yrel;
 
+                // Otherwise drawing after the pan would join up with where the stroke was before it
+                screen_to_canvas(state, event->motion.x, event->motion.y, &state->last_mouse_x, &state->last_mouse_y);
                 break;
             }
+
+            if (!state->mouse_down) break;
 
             double mx = 0, my = 0;
             screen_to_canvas(state, event->motion.x,event->motion.y, &mx, &my);
@@ -617,31 +752,60 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
             break;
         }
         case SDL_EVENT_MOUSE_WHEEL: {
+            zoom_at(state, event->wheel.mouse_x, event->wheel.mouse_y, event->wheel.y * 0.1);
+            break;
+        }
+        case SDL_EVENT_FINGER_DOWN: {
+            if (state->window_state == SELECTING || state->gesture_finger_count == 2) break;
+
+            const int i = state->gesture_finger_count++;
+            state->gesture_fingers[i] = event->tfinger.fingerID;
+            state->gesture_points[i] = (SDL_FPoint){ event->tfinger.x * state->window_width, event->tfinger.y * state->window_height };
+
+            // The first finger has already started a stroke through SDL's touch-to-mouse emulation
+            if (state->gesture_finger_count == 2) state->mouse_down = false;
+            break;
+        }
+        case SDL_EVENT_FINGER_MOTION: {
+            const int i = find_gesture_finger(state, event->tfinger.fingerID);
+            if (i < 0) break;
+
+            const SDL_FPoint old_a = state->gesture_points[0], old_b = state->gesture_points[1];
+            state->gesture_points[i] = (SDL_FPoint){ event->tfinger.x * state->window_width, event->tfinger.y * state->window_height };
+            if (state->gesture_finger_count < 2) break;
+
+            const SDL_FPoint a = state->gesture_points[0], b = state->gesture_points[1];
+            const double mid_x = (a.x + b.x) / 2.0, mid_y = (a.y + b.y) / 2.0;
+
+            state->canvas_x += mid_x - (old_a.x + old_b.x) / 2.0;
+            state->canvas_y += mid_y - (old_a.y + old_b.y) / 2.0;
+
+            // Platforms with native pinch events already zoom through SDL_EVENT_PINCH_UPDATE
+            const double old_dist = SDL_sqrt(SDL_pow(old_a.x - old_b.x, 2) + SDL_pow(old_a.y - old_b.y, 2));
+            const double dist = SDL_sqrt(SDL_pow(a.x - b.x, 2) + SDL_pow(a.y - b.y, 2));
+            if (!state->has_native_pinch && old_dist > 0 && dist > 0) {
+                zoom_at(state, mid_x, mid_y, SDL_log(dist / old_dist) / SDL_log(2.0));
+            }
+            break;
+        }
+        case SDL_EVENT_FINGER_UP:
+        case SDL_EVENT_FINGER_CANCELED: {
+            const int i = find_gesture_finger(state, event->tfinger.fingerID);
+            if (i < 0) break;
+
+            state->gesture_fingers[i] = state->gesture_fingers[state->gesture_finger_count-1];
+            state->gesture_points[i] = state->gesture_points[state->gesture_finger_count-1];
+            state->gesture_finger_count--;
+            break;
+        }
+        case SDL_EVENT_PINCH_BEGIN: {
+            state->has_native_pinch = true;
+            break;
+        }
+        case SDL_EVENT_PINCH_UPDATE: {
             float mx, my;
             SDL_GetMouseState(&mx, &my);
-
-            double cx, cy;
-            screen_to_canvas(state, mx, my, &cx, &cy);
-
-            state->canvas_zoom += event->wheel.y * 0.1;
-
-            double scale = SDL_pow(2, state->canvas_zoom);
-            double rad = state->canvas_rotation * (SDL_PI_F / 180.0);
-            double cos_theta = SDL_cos(rad);
-            double sin_theta = SDL_sin(rad);
-
-            double sx = cx - (state->canvas_width / 2.0);
-            double sy = cy - (state->canvas_height / 2.0);
-
-            double rx = sx * scale;
-            double ry = sy * scale;
-
-            double dx = (rx * cos_theta) - (ry * sin_theta);
-            double dy = (rx * sin_theta) + (ry * cos_theta);
-
-            state->canvas_x = mx - dx - (state->window_width / 2.0);
-            state->canvas_y = my - dy - (state->window_height / 2.0);
-
+            zoom_at(state, mx, my, SDL_log(event->pinch.scale) / SDL_log(2.0));
             break;
         }
     }
@@ -729,6 +893,35 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
     SDL_GetWindowSize(state->window, &state->window_width, &state->window_height);
 
+#ifdef SDL_PLATFORM_EMSCRIPTEN
+    const double pinch_zoom = take_pinch_zoom();
+    if (pinch_zoom != 0 && state->window_state != SELECTING) {
+        float mx, my;
+        SDL_GetMouseState(&mx, &my);
+        zoom_at(state, mx, my, pinch_zoom);
+    }
+#endif
+
+    state->reset_view_rect.x = state->window_width - state->reset_view_rect.w - 10;
+    state->reset_view_rect.y = 10;
+
+    const bool *key_state = SDL_GetKeyboardState(NULL);
+    const bool want_move_cursor = state->window_state != SELECTING && (state->panning || key_state[SDL_SCANCODE_SPACE]);
+    if (want_move_cursor != state->showing_move_cursor && state->move_cursor) {
+        SDL_SetCursor(want_move_cursor ? state->move_cursor : SDL_GetDefaultCursor());
+        state->showing_move_cursor = want_move_cursor;
+    }
+
+    const int zoom_percent = (int)SDL_round(SDL_pow(2, state->canvas_zoom) * 100);
+    if (zoom_percent != state->zoom_text_percent) {
+        char buf[32];
+        SDL_snprintf(buf, sizeof(buf), "%d%%", zoom_percent);
+        TTF_SetTextString(state->zoom_text, buf, 0);
+        state->zoom_text_percent = zoom_percent;
+    }
+    int zoom_text_w = 0, zoom_text_h = 0;
+    TTF_GetTextSize(state->zoom_text, &zoom_text_w, &zoom_text_h);
+
     SDL_SetRenderDrawColor(state->renderer, 0, 0, 0, 255);
     SDL_RenderClear(state->renderer);
 
@@ -797,6 +990,9 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
             SDL_SetRenderDrawColor(state->renderer, 255, 255, 255, 255);
             TTF_DrawRendererText(state->rotate_buttons_text, 10, 5);
+
+            draw_button(state, state->reset_view_rect, state->reset_view_text);
+            TTF_DrawRendererText(state->zoom_text, 10, state->window_height - zoom_text_h - 10);
             break;
         }
         case FINISH: {
@@ -809,6 +1005,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
             draw_button(state, state->save_drawing_rect, state->save_drawing_text);
             draw_button(state, state->save_timestamps_rect, state->save_timestamps_text);
+            draw_button(state, state->reset_view_rect, state->reset_view_text);
+            TTF_DrawRendererText(state->zoom_text, 10, state->window_height - zoom_text_h - 10);
 
             break;
         }
@@ -826,6 +1024,8 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         TTF_DestroyText(state->ready_button_text);
         TTF_DestroyText(state->finish_button_text);
         TTF_DestroyText(state->final_screen_text);
+        TTF_DestroyText(state->reset_view_text);
+        TTF_DestroyText(state->zoom_text);
         TTF_DestroyText(state->save_drawing_text);
         TTF_DestroyText(state->save_timestamps_text);
         TTF_DestroyText(state->rotate_buttons_text);
@@ -836,6 +1036,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
         TTF_DestroyRendererTextEngine(state->text_engine);
         TTF_CloseFont(state->font);
         SDL_DestroyTexture(state->color_texture);
+        SDL_DestroyCursor(state->move_cursor);
         SDL_DestroyRenderer(state->renderer);
         SDL_DestroyWindow(state->window);
         SDL_free(state->color_timestamps);

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <title>fill a canvas with a 1px brush</title>
     <style>
         html, body {
@@ -17,6 +17,8 @@
         #canvas {
             display: block;
             outline: none;
+            /* Two-finger pinch/pan is handled by the app, not the browser */
+            touch-action: none;
         }
         #status {
             position: fixed;
